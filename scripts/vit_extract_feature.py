@@ -140,10 +140,6 @@ def main():
             save_path = osp.join(args.save_dir, fname, m)
             
             postfix = ""
-            if args.s2_mode != "":
-                postfix = f"_{args.s2_mode}"
-            if len(args.scales) == 3:
-                postfix = f'{postfix}_large'
             if st is not None:
                 postfix = f'_{st}{postfix}'
             
