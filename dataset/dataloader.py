@@ -3,45 +3,50 @@ import os
 import numpy as np
 from typing import Dict, List, Optional, Union, Any, Tuple
 from pathlib import Path
-from spamo.constants import *
 import random
 
 
-class Phoenix14T(torch.utils.data.Dataset):
-    """
-    Dataset class for the Phoenix14T sign language dataset.
-    
-    This class handles loading video features and annotations for sign language translation,
-    supporting both spatial and spatiotemporal feature types.
-    """
+class DatasetLoader(torch.utils.data.Dataset):
+
     def __init__(
         self,
         anno_root: str,
         vid_root: str,
         feat_root: str,
         mae_feat_root: str,
-        mode: str = 'dev',
+        mode: str = 'train',
         spatial: bool = False,
         spatiotemporal: bool = False,
         spatial_postfix: str = '',
-        spatiotemporal_postfix: Union[str, List[str]] = ''
+        spatiotemporal_postfix: Union[str, List[str]] = '',
+        anno_filename: str = '{mode}_info.npy', 
+        default_lang: str = 'Unknown',            
+        lang_variants: List[str] = None,          
+        video_path_format: Optional[str] = None,  
+        required_fields: List[str] = None         
     ):
-        """
-        Initialize the Phoenix14T dataset.
+
+    super().__init__()
+
+    """
+        Initialize the dataset.
         
         Args:
             anno_root: Root directory for annotation files
             vid_root: Root directory for video files
             feat_root: Root directory for spatial features
             mae_feat_root: Root directory for spatiotemporal features
-            mode: Dataset split ('train', 'dev', or 'test')
+            mode: Dataset split (e.g., 'train', 'dev', 'test', 'val')
             spatial: Whether to load spatial features
             spatiotemporal: Whether to load spatiotemporal features
             spatial_postfix: Filename postfix for spatial features
-            spatiotemporal_postfix: Filename postfix for spatiotemporal features,
-                                    can be a string or a list of strings
+            spatiotemporal_postfix: Filename postfix for spatiotemporal features
+            anno_filename: Annotation filename template (e.g., '{mode}_info.npy', '{mode}_info_ml.npy')
+            default_lang: Default language code for dataset
+            lang_variants: List of language variants to look for (e.g., ['en', 'es', 'fr'])
+            video_path_format: Optional custom video path format string
+            required_fields: List of required fields in annotation dict (e.g., ['fileid', 'text', 'gloss'])
         """
-        super().__init__()
         
         self.anno_root = Path(anno_root)
         self.vid_root = Path(vid_root)
@@ -52,17 +57,25 @@ class Phoenix14T(torch.utils.data.Dataset):
         self.spatiotemporal = spatiotemporal
         self.spatial_postfix = spatial_postfix
         self.spatiotemporal_postfix = spatiotemporal_postfix
+        self.default_lang = default_lang
+        self.lang_variants = lang_variants or []
+        self.video_path_format = video_path_format
+        self.required_fields = required_fields or ['fileid', 'text', 'gloss', 'folder']
         
         # Validate inputs
         if not (spatial or spatiotemporal):
             raise ValueError("At least one of 'spatial' or 'spatiotemporal' must be True")
         
         # Load annotations
-        anno_path = self.anno_root / f'{mode}_info_ml.npy'
+        anno_filename = anno_filename.format(mode=mode)  # Replace {mode} placeholder
+        anno_path = self.anno_root / anno_filename
         if not anno_path.exists():
             raise FileNotFoundError(f"Annotation file not found: {anno_path}")
         
         self.data = np.load(anno_path, allow_pickle=True).item()
+        
+        # Validate annotation format
+        self._validate_annotations()
         
         # Set up directory paths
         self.spatial_dir = self.feat_root / self.mode
@@ -70,6 +83,17 @@ class Phoenix14T(torch.utils.data.Dataset):
         
         # Validate that key directories exist
         self._validate_directories()
+
+    def _validate_annotations(self) -> None:
+        """Validate that annotations have required fields."""
+        if len(self.data) == 0:
+            raise ValueError("Annotation file is empty")
+        
+        # Check first item for required fields
+        first_item = self.data[0]
+        missing_fields = [f for f in self.required_fields if f not in first_item]
+        if missing_fields:
+            raise ValueError(f"Missing required fields in annotations: {missing_fields}")
 
     def _validate_directories(self) -> None:
         """Validate that all necessary directories exist."""
@@ -80,18 +104,7 @@ class Phoenix14T(torch.utils.data.Dataset):
             raise FileNotFoundError(f"Spatiotemporal feature directory not found: {self.spatiotemporal_dir}")
 
     def _load_spatial_features(self, file_id: str) -> torch.Tensor:
-        """
-        Load spatial features for a given file ID.
-        
-        Args:
-            file_id: The file identifier
-            
-        Returns:
-            Tensor containing spatial features
-            
-        Raises:
-            FileNotFoundError: If the feature file doesn't exist
-        """
+        """Load spatial features for a given file ID."""
         feat_path = self.spatial_dir / f"{file_id}{self.spatial_postfix}.npy"
         if not feat_path.exists():
             raise FileNotFoundError(f"Spatial feature file not found: {feat_path}")
@@ -99,18 +112,7 @@ class Phoenix14T(torch.utils.data.Dataset):
         return torch.tensor(np.load(feat_path))
 
     def _load_spatiotemporal_features(self, file_id: str) -> Union[torch.Tensor, List[torch.Tensor]]:
-        """
-        Load spatiotemporal features for a given file ID.
-        
-        Args:
-            file_id: The file identifier
-            
-        Returns:
-            Tensor or list of tensors containing spatiotemporal features
-            
-        Raises:
-            FileNotFoundError: If any feature file doesn't exist
-        """
+        """Load spatiotemporal features for a given file ID."""
         if isinstance(self.spatiotemporal_postfix, str):
             glor_path = self.spatiotemporal_dir / f"{file_id}{self.spatiotemporal_postfix}.npy"
             if not glor_path.exists():
@@ -126,16 +128,28 @@ class Phoenix14T(torch.utils.data.Dataset):
                 features.append(torch.tensor(np.load(path)))
             return features
 
+    def _build_video_path(self, data: Dict) -> str:
+        """Build video path using configured format or default."""
+        if self.video_path_format:
+            # Use custom format string
+            try:
+                return self.video_path_format.format(**data)
+            except KeyError as e:
+                raise ValueError(f"Video path format references missing field: {e}")
+        else:
+            # Default: just return folder if it exists
+            if 'folder' in data:
+                return str(self.vid_root / data['folder'])
+            else:
+                return ''
+
+    def _get_text_field(self, data: Dict, lang: str = 'text') -> str:
+        """Get text field, handling multiple language variants."""
+        field_name = f'{lang}_text' if lang != 'text' else 'text'
+        return data.get(field_name, '')
+
     def __getitem__(self, index: int) -> Dict[str, Any]:
-        """
-        Get a dataset item by index.
-        
-        Args:
-            index: The index of the item to retrieve
-            
-        Returns:
-            Dictionary containing all features and metadata for the item
-        """
+        """Get a dataset item by index."""
         data = self.data[index]
         file_id = data['fileid']
         pixel_value = None
@@ -160,43 +174,27 @@ class Phoenix14T(torch.utils.data.Dataset):
                 else:
                     glor_value = [torch.tensor([])]
         
-        # Create result dictionary with normalized text
+        # Create result dictionary
         result = {
             'pixel_value': pixel_value,
             'glor_value': glor_value,
             'bool_mask_pos': None,
-            'text': self._normalize_text(data['text']),
-            'gloss': data['gloss'],
+            'text': data.get('text', '').strip() if 'text' in data else '',
+            'gloss': data.get('gloss', ''),
             'id': file_id,
-            'num_frames': len(pixel_value) if pixel_value is not None else 0,
-            'vid_path': str(self.vid_root / 'features' / 'fullFrame-256x256px' / data['folder']),
-            'lang': 'German'
+            'num_frames': len(pixel_value) if pixel_value is not None and len(pixel_value) > 0 else 0,
+            'vid_path': self._build_video_path(data),
+            'lang': self.default_lang
         }
         
-        # Add language texts if available
-        for lang in ['en', 'es', 'fr']:
-            if f'{lang}_text' in data:
-                result[f'{lang}_text'] = data[f'{lang}_text']
+        # Add language variants if configured
+        for lang in self.lang_variants:
+            result[f'{lang}_text'] = self._get_text_field(data, lang)
         
         # Store original data for reference
         result['original_info'] = data
         
         return result
-
-    def _normalize_text(self, text: str) -> str:
-        """
-        Normalize text by ensuring it ends with a period.
-        
-        Args:
-            text: Input text to normalize
-            
-        Returns:
-            Normalized text
-        """
-        text = text.strip()
-        if not text.endswith('.'):
-            text = f"{text}."
-        return text
 
     def __len__(self) -> int:
         """Get the number of items in the dataset."""
@@ -204,9 +202,5 @@ class Phoenix14T(torch.utils.data.Dataset):
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> List[Dict]:
+        """Collate function for batch processing."""
         return batch
-
-
-
-
-
