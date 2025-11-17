@@ -45,7 +45,8 @@ class ViTFeatureReader(object):
 
     @torch.no_grad()
     def get_feats(self, video):
-        inputs = self.image_processor(list(video), return_tensors="pt").to(self.device).pixel_value
+        batch = self.image_processor(list(video), return_tensors="pt")
+        pixel_values = batch['pixel_values'].to(self.device)
         outputs = self.forward_features(inputs)
         return outputs[:, 0]
 
