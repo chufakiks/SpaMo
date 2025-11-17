@@ -7,7 +7,7 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from PIL import Image
-from transformers import AutoImageProcessor, CLIPVisionModel
+from transformers import AutoImageProcessor, CvtforImageClassification
 
 import sys
 sys.path.append('./')
@@ -31,7 +31,7 @@ class ViTFeatureReader(object):
         self.device = device
         self.nth_layer = nth_layer
         
-        self.model = CLIPVisionModel.from_pretrained(
+        self.model = CvtForImageClassification.from_pretrained(
             model_name, output_hidden_states=True, cache_dir=cache_dir
         ).to(device).eval()
         
