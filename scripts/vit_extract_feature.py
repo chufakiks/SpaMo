@@ -47,7 +47,7 @@ class ViTFeatureReader(object):
     def get_feats(self, video):
         batch = self.image_processor(list(video), return_tensors="pt")
         pixel_values = batch['pixel_values'].to(self.device)
-        outputs = self.forward_features(inputs)
+        outputs = self.forward_features(pixel_values)
         return outputs[:, 0].cpu().detach()
 
 
