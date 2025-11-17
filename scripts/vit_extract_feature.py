@@ -5,7 +5,6 @@ import glob
 import tqdm
 import torch
 import numpy as np
-import torch.nn.functional as F
 from PIL import Image
 from transformers import AutoImageProcessor, CvtforImageClassification
 
